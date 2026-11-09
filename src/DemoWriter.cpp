@@ -787,6 +787,19 @@ void initAmbientSounds() {
 	}
 }
 
+void initLightStyles() {
+	for (int i = 0; i < MAX_LIGHTSTYLE_PATTERNS; i++) {
+		if (!g_lightStyles[i]) {
+			continue; // never set
+		}
+
+		MessageBegin(MSG_SPEC, SVC_LIGHTSTYLE, NULL, NULL);
+		WriteByte(i);
+		WriteString(STRING(g_lightStyles[i]));
+		MessageEnd();
+	}
+}
+
 bool DemoWriter::shouldWriteDemoFrame() {
 	uint64_t now = getEpochMillis();
 	if (now < nextDemoUpdate) {
@@ -847,6 +860,7 @@ bool DemoWriter::writeDemoFile(FrameData& frame, bool wantFile, bool wantStream)
 
 	if (g_stats.frameCount == 5) {
 		initAmbientSounds();
+		initLightStyles();
 	}
 
 	bool isKeyframe = now >= nextDemoKeyframe;
