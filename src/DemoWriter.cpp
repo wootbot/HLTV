@@ -43,7 +43,7 @@ DemoWriter::~DemoWriter() {
 	closeDemoFile();
 }
 
-void DemoWriter::initDemoFile() {
+void DemoWriter::openDemoFile() {
 	bool autoMode = g_auto_demo_file->value;
 
 	fpath = "";
@@ -111,12 +111,21 @@ void DemoWriter::initDemoFile() {
 		g_sventv->enableDemoFile = false;
 		return;
 	}
+}
+
+void DemoWriter::beginSession(bool wantFile, bool wantStream) {
+	if (wantFile) {
+		openDemoFile();
+	}
+	if (!demoFile && !wantStream) {
+		return;
+	}
+
+	warnedStreamDeferred = false;
 
 	memset(fileedicts, 0, MAX_DEMO_EDICTS * sizeof(netedict));
 	memset(usrstates, 0, MAX_PLAYERS * sizeof(DemoUserCmdData));
 	memset(g_userInfoDirty, 1, sizeof(bool) * 33);
-
-	fileDeltaBuffer = new char[fileDeltaBufferSize];
 
 	uint64_t now = getEpochMillis();
 
@@ -163,18 +172,30 @@ void DemoWriter::initDemoFile() {
 	memset(&g_stats, 0, sizeof(DemoStats));
 	g_stats.totalWriteSz = sizeof(DemoHeader) + header.modelLen + header.soundLen;
 
-	fwrite(&header, sizeof(DemoHeader), 1, demoFile);
+	std::vector<uint8_t> headerBlock;
+	auto append = [&headerBlock](const void* data, size_t sz) {
+		headerBlock.insert(headerBlock.end(), (const uint8_t*)data, (const uint8_t*)data + sz);
+	};
 
-	stringPoolOffset = ftell(demoFile);
-	fwrite(g_stringpool, STRING_POOL_SIZE, 1, demoFile); // empty for now
+	append(&header, sizeof(DemoHeader));
+	stringPoolOffset = headerBlock.size();
+	append(g_stringpool, STRING_POOL_SIZE);
+	lastStringPoolIdx = g_stringpool_idx;
 
 	if (modelData.size()) {
-		fwrite(modelIndexes, modelCount*sizeof(uint16_t), 1, demoFile);
-		fwrite(modelData.c_str(), modelData.size(), 1, demoFile);
+		append(modelIndexes, modelCount * sizeof(uint16_t));
+		append(modelData.c_str(), modelData.size());
 	}
 	if (soundData.size()) {
-		fwrite(soundIndexes, soundCount * sizeof(uint16_t), 1, demoFile);
-		fwrite(soundData.c_str(), soundData.size(), 1, demoFile);
+		append(soundIndexes, soundCount * sizeof(uint16_t));
+		append(soundData.c_str(), soundData.size());
+	}
+
+	if (demoFile) {
+		fwrite(headerBlock.data(), headerBlock.size(), 1, demoFile);
+	}
+	if (wantStream) {
+		stream.beginSession(headerBlock, stringPoolOffset);
 	}
 
 	delete[] modelIndexes;
@@ -774,21 +795,45 @@ bool DemoWriter::shouldWriteDemoFrame() {
 	return true;
 }
 
-bool DemoWriter::writeDemoFile(FrameData& frame) {
-	if (!demoFile) {
-		initDemoFile();
+bool DemoWriter::writeDemoFile(FrameData& frame, bool wantFile, bool wantStream) {
+	if (!wantFile && demoFile) {
+		closeDemoFile();
 	}
-	if (!demoFile) {
+	if (!wantStream && stream.isSessionActive()) {
+		stream.endSession();
+	}
+
+	if (wantFile && !demoFile) {
+		// a demo file needs everything from the start of a session, so viewers have to rejoin
+		stream.endSession();
+		beginSession(true, wantStream);
+	}
+	else if (wantStream && !stream.isSessionActive()) {
+		if (demoFile) {
+			// starting over here would split the demo file that's being written
+			if (!warnedStreamDeferred) {
+				warnedStreamDeferred = true;
+				g_engfuncs.pfnServerPrint("HLTV stream: will start on the next map (a demo is being recorded)\n");
+			}
+		}
+		else {
+			beginSession(false, true);
+		}
+	}
+
+	if (!isActive()) {
 		return false;
 	}
 
-	if (ftell(demoFile)> g_max_demo_megabytes->value * 1024*1024) {
+	if (demoFile && ftell(demoFile) > g_max_demo_megabytes->value * 1024*1024) {
 		ALERT(at_error, "Max demo file size exceeded (%.2f MB)!\n", (float)(g_max_demo_megabytes->value*1024*1024));
 		g_can_autostart_demo = false;
 		if (g_sventv)
 			g_sventv->enableDemoFile = false;
 		closeDemoFile();
-		return false;
+		if (!stream.isSessionActive()) {
+			return false;
+		}
 	}
 
 	if (!shouldWriteDemoFrame()) {
@@ -813,7 +858,7 @@ bool DemoWriter::writeDemoFile(FrameData& frame) {
 
 	uint16_t numEntDeltas = 0;
 
-	bool validateOutput = g_validate_output->value;
+	bool validateOutput = g_validate_output->value && demoFile; // reads frames back from the file
 
 	DemoDataTest* testData = NULL;
 	DemoPlayer* testPlayer = NULL;
@@ -912,18 +957,23 @@ bool DemoWriter::writeDemoFile(FrameData& frame) {
 
 	lastDemoFrameTime = now;
 
-	size_t frameStartOffset = ftell(demoFile);
+	size_t frameStartOffset = demoFile ? ftell(demoFile) : 0;
 	uint32_t expectedDemoTime = 0;
 
-	fwrite(&header, sizeof(DemoFrame), 1, demoFile);
+	frameOut.clear();
+	auto emit = [this](const void* data, size_t sz) {
+		frameOut.insert(frameOut.end(), (const uint8_t*)data, (const uint8_t*)data + sz);
+	};
+
+	emit(&header, sizeof(DemoFrame));
 
 	if (header.isGiantFrame) {
 		g_stats.currentWriteSz += sizeof(uint32_t) * 2;
 		uint32_t demoTime = now - demoStartTime;
 		uint32_t frameSize = g_stats.currentWriteSz;
 		expectedDemoTime = demoTime;
-		fwrite(&demoTime, sizeof(uint32_t), 1, demoFile);
-		fwrite(&frameSize, sizeof(uint32_t), 1, demoFile);
+		emit(&demoTime, sizeof(uint32_t));
+		emit(&frameSize, sizeof(uint32_t));
 		g_stats.giantFrameCount++;
 	}
 	else if (header.isBigFrame) {
@@ -931,8 +981,8 @@ bool DemoWriter::writeDemoFile(FrameData& frame) {
 		uint8_t demoTimeDelta = frameTimeDelta;
 		uint16_t frameSize = g_stats.currentWriteSz;
 		expectedDemoTime = demoTimeDelta;
-		fwrite(&demoTimeDelta, sizeof(uint8_t), 1, demoFile);
-		fwrite(&frameSize, sizeof(uint16_t), 1, demoFile);
+		emit(&demoTimeDelta, sizeof(uint8_t));
+		emit(&frameSize, sizeof(uint16_t));
 		g_stats.bigFrameCount++;
 	}
 	else {
@@ -940,51 +990,65 @@ bool DemoWriter::writeDemoFile(FrameData& frame) {
 		uint8_t demoTimeDelta = frameTimeDelta;
 		uint16_t frameSize = g_stats.currentWriteSz;
 		expectedDemoTime = demoTimeDelta;
-		fwrite(&demoTimeDelta, sizeof(uint8_t), 1, demoFile);
-		fwrite(&frameSize, sizeof(uint8_t), 1, demoFile);
+		emit(&demoTimeDelta, sizeof(uint8_t));
+		emit(&frameSize, sizeof(uint8_t));
 	}
 
 	g_stats.incTotals();
 
 	if (header.hasEntityDeltas) {
-		fwrite(&numEntDeltas, sizeof(uint16_t), 1, demoFile);
-		fwrite(entbuffer.getBuffer(), entbuffer.tell(), 1, demoFile);
+		emit(&numEntDeltas, sizeof(uint16_t));
+		emit(entbuffer.getBuffer(), entbuffer.tell());
 	}
 	if (header.hasNetworkMessages) {
-		fwrite(msgbuffer.getBuffer(), msgbuffer.tell(), 1, demoFile);
+		emit(msgbuffer.getBuffer(), msgbuffer.tell());
 	}
 	if (header.hasEvents) {
-		fwrite(&frame.event_count, sizeof(uint8_t), 1, demoFile);
-		fwrite(evtbuffer.getBuffer(), evtbuffer.tell(), 1, demoFile);
+		emit(&frame.event_count, sizeof(uint8_t));
+		emit(evtbuffer.getBuffer(), evtbuffer.tell());
 	}
 	if (header.hasCommands) {
-		fwrite(&frame.cmds_count, sizeof(uint8_t), 1, demoFile);
-		fwrite(cmdbuffer.getBuffer(), cmdbuffer.tell(), 1, demoFile);
+		emit(&frame.cmds_count, sizeof(uint8_t));
+		emit(cmdbuffer.getBuffer(), cmdbuffer.tell());
 	}
 	if (header.hasUsercmds) {
-		fwrite(usrbuffer.getBuffer(), usrbuffer.tell(), 1, demoFile);
+		emit(usrbuffer.getBuffer(), usrbuffer.tell());
 	}
 	if (header.isGiantFrame) {
 		// giant frames are rare, so not bothering with a flag for sprays
-		fwrite(&sprayCount, 1, 1, demoFile);
+		emit(&sprayCount, 1);
 		for (int i = 0; i < MAX_PLAYERS; i++) {
 			if (g_playerSprays[i].dirty) {
 				g_playerSprays[i].dirty = false;
 				uint8_t playerIndex = i + 1;
 				uint16_t sz = g_playerSprays[i].sz;
-				fwrite(&playerIndex, 1, 1, demoFile);
-				fwrite(&sz, 2, 1, demoFile);
-				fwrite(g_playerSprays[i].data, sz, 1, demoFile);
+				emit(&playerIndex, 1);
+				emit(&sz, 2);
+				emit(g_playerSprays[i].data, sz);
 			}
 		}
 	}
 
-	if (lastStringPoolIdx != g_stringpool_idx) {
-		uint32_t currentOffset = ftell(demoFile);
-		fseek(demoFile, stringPoolOffset, SEEK_SET);
-		fwrite(g_stringpool, g_stringpool_idx, 1, demoFile);
-		fseek(demoFile, currentOffset, SEEK_SET);
+	if (demoFile) {
+		fwrite(frameOut.data(), frameOut.size(), 1, demoFile);
 	}
+
+	if (lastStringPoolIdx != g_stringpool_idx) {
+		if (demoFile) {
+			uint32_t currentOffset = ftell(demoFile);
+			fseek(demoFile, stringPoolOffset, SEEK_SET);
+			fwrite(g_stringpool, g_stringpool_idx, 1, demoFile);
+			fseek(demoFile, currentOffset, SEEK_SET);
+		}
+
+		// must arrive before the frame that uses the new strings
+		if (g_stringpool_idx > lastStringPoolIdx) {
+			stream.pushStringPool(lastStringPoolIdx, g_stringpool + lastStringPoolIdx, g_stringpool_idx - lastStringPoolIdx);
+		}
+		lastStringPoolIdx = g_stringpool_idx;
+	}
+
+	stream.pushFrame(frameOut.data(), frameOut.size(), isKeyframe);
 
 	if (validateOutput) {
 		size_t oldOffset = ftell(demoFile);
@@ -1103,6 +1167,10 @@ void DemoWriter::closeDemoFile() {
 
 bool DemoWriter::isFileOpen() {
 	return demoFile != NULL;
+}
+
+bool DemoWriter::isActive() {
+	return demoFile != NULL || stream.isSessionActive();
 }
 
 uint32_t DemoWriter::getRecordingTime() {

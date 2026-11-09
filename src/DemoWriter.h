@@ -1,6 +1,7 @@
 #pragma once
 #include "DemoFile.h"
 #include "netedict.h"
+#include "DemoStream.h"
 
 struct DemoDataTest;
 
@@ -12,16 +13,23 @@ public:
 	DemoWriter();
 	~DemoWriter();
 
-	void initDemoFile();
+	DemoStream stream;
 
+	// opens the demo file (if wanted) and starts a new sequence of frames
+	void beginSession(bool wantFile, bool wantStream);
+
+	// encodes one frame and sends the same bytes to each wanted output.
 	// return true if more data requested
-	bool writeDemoFile(FrameData& frame);
+	bool writeDemoFile(FrameData& frame, bool wantFile, bool wantStream);
 
 	bool shouldWriteDemoFrame();
 
 	void closeDemoFile();
 
 	bool isFileOpen();
+
+	// true if frames are going to a file or the live stream
+	bool isActive();
 
 	void compressDemo(std::string inPath, std::string outPath, int sleepMillis);
 
@@ -30,6 +38,8 @@ public:
 
 private:
 	void compressNetMessage(FrameData& frame, NetMessageData& msg);
+
+	void openDemoFile();
 
 	mstream writeEntDeltas(FrameData& frame, uint16_t& numEntDeltas, DemoDataTest* testData);
 	mstream writeMsgDeltas(FrameData& frame, DemoDataTest* testData);
@@ -50,6 +60,9 @@ private:
 
 	netedict* fileedicts = NULL; // last edicts written to file
 	DemoUserCmdData usrstates[32];
+
+	std::vector<uint8_t> frameOut; // the current frame, encoded
+	bool warnedStreamDeferred = false;
 
 	char* fileDeltaBuffer = NULL;
 	int fileDeltaBufferSize = -1;
