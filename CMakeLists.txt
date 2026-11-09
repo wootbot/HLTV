@@ -8,6 +8,7 @@ set(SOURCE
 	src/main.h src/main.cpp
 	src/SvenTV.h src/SvenTV.cpp
 	src/DemoWriter.h src/DemoWriter.cpp
+	src/DemoStream.h src/DemoStream.cpp
 	src/DemoPlayer.h src/DemoPlayer.cpp
 	src/DemoStats.h src/DemoStats.cpp
 	src/NetClient.h src/NetClient.cpp
@@ -41,6 +42,10 @@ endif()
 add_library(${PROJECT_NAME} SHARED ${SOURCE})
 
 hlcoop_setup_plugin("plugins/server/")
+
+if (WIN32)
+	target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32)
+endif()
 
 if (USE_XZ)
 	set_target_properties(libgnu PROPERTIES FOLDER "External")

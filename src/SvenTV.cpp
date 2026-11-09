@@ -138,6 +138,35 @@ void SvenTV::think_mainThread() {
 	}
 }
 
+void SvenTV::endStreamSession() {
+	demoWriter->stream.endSession();
+
+	// the next session's first delta must not be based on this map's entities
+	for (int i = 0; i < gpGlobals->maxEntities; i++) {
+		frame.netedicts[i].reset();
+	}
+}
+
+void SvenTV::setStreamPassword(const char* password) {
+	demoWriter->stream.setPassword(password);
+}
+
+std::vector<StreamClientInfo> SvenTV::getStreamClients() {
+	return demoWriter->stream.getClients();
+}
+
+void SvenTV::updateStreamSocket() {
+	if (g_stream && g_stream->value > 0) {
+		demoWriter->stream.listen((uint16_t)g_stream_port->value);
+		demoWriter->stream.maxFrames = V_max((int)g_stream_frames->value, 1);
+	}
+	else if (demoWriter->stream.isListening()) {
+		demoWriter->stream.stopListening();
+	}
+
+	demoWriter->stream.think();
+}
+
 uint32_t SvenTV::getRecordingTime() {
 	if (demoWriter) {
 		return demoWriter->getRecordingTime();
@@ -472,9 +501,10 @@ void SvenTV::broadcastEntityStates() {
 }
 
 void SvenTV::think_tvThread() {
-	bool loadNewData = demoWriter->isFileOpen();
+	bool loadNewData = demoWriter->isActive();
 
 	while (!threadShouldExit) {
+		updateStreamSocket();
 
 		if (!singleThreadMode) {
 			while (edictCopyState.getValue() != EDICT_COPY_FINISHED && !threadShouldExit) {
@@ -504,11 +534,12 @@ void SvenTV::think_tvThread() {
 
 		bool wantMoreData = false;
 
-		if (enableDemoFile) {
-			wantMoreData = demoWriter->writeDemoFile(frame);
+		if (enableDemoFile || enableStream) {
+			wantMoreData = demoWriter->writeDemoFile(frame, enableDemoFile, enableStream);
 		}
-		else if (demoWriter->isFileOpen()) {
+		else if (demoWriter->isActive()) {
 			demoWriter->closeDemoFile();
+			demoWriter->stream.endSession();
 
 			for (int i = 0; i < gpGlobals->maxEntities; i++) {
 				frame.netedicts[i].reset();

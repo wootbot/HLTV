@@ -83,6 +83,10 @@ cvar_t* g_validate_output;
 cvar_t* g_compress_demos; // compress demos with lzma after writing
 cvar_t* g_write_debug_info; // write debugging info to the demo files (monster state, health, etc.)
 cvar_t* g_write_user_cmds; // write user commands (movement, buttons, etc.)
+cvar_t* g_stream = NULL; // stream demo frames to clients over TCP, without needing a demo file
+cvar_t* g_stream_port = NULL;
+cvar_t* g_stream_frames = NULL; // recent frames to keep for clients that join late
+cvar_t* g_stream_password = NULL; // required to connect to the stream, if not empty
 
 DemoStats g_stats;
 bool demoStatPlayers[33] = { false };
@@ -166,6 +170,8 @@ HOOK_RET_VOID ClientLeaveHook(CBasePlayer* ent) {
 HOOK_RET_VOID Changelevel() {
 	if (g_sventv) {
 		g_sventv->enableDemoFile = false;
+		g_sventv->enableStream = false;
+		g_sventv->endStreamSession();
 		g_demoPlayer->stopReplay();
 		g_server_frame_count = 0;
 		g_netmessage_count = 0;
@@ -282,6 +288,9 @@ HOOK_RET_VOID StartFrameHook() {
 		g_sventv->enableDemoFile = true;
 	}
 
+	g_sventv->enableStream = g_stream && g_stream->value > 0 && gpGlobals->time > 1.0f;
+	g_sventv->setStreamPassword(g_stream_password->string);
+
 	static float lastStats = 0;
 
 	if (gpGlobals->time - lastStats >= 0.05f || lastStats > gpGlobals->time) {
@@ -300,7 +309,7 @@ HOOK_RET_VOID StartFrameHook() {
 	if (g_demoPlayer)
 		g_demoPlayer->playDemo();
 
-	if (!g_sventv->enableDemoFile && !g_sventv->enableServer) {
+	if (!g_sventv->isCapturing()) {
 		if (singleThreadMode) {
 			g_sventv->think_mainThread();
 		}
@@ -317,7 +326,7 @@ HOOK_RET_VOID StartFrameHook() {
 
 HOOK_RET_VOID MessageBegin(int msg_dest, int msg_type, const float* pOrigin, edict_t* ed) {
 	//ALERT(at_console, "NET MESG: %d\n", msg_type);
-	if (!g_sventv || (!g_sventv->enableDemoFile && !g_sventv->enableServer) || g_pause_message_logging) {
+	if (!g_sventv || (!g_sventv->isCapturing()) || g_pause_message_logging) {
 		g_should_write_next_message = false;
 
 		DEFAULT_HOOK_RETURN;
@@ -563,6 +572,33 @@ bool show_demo_stats(CBasePlayer* plr, const CommandArgs& args) {
 	return true;
 }
 
+// plr is null for the server console
+static void printStreamInfo(CBasePlayer* plr, const char* msg) {
+	if (plr) {
+		UTIL_ClientPrint(plr, print_console, msg);
+	}
+	else {
+		g_engfuncs.pfnServerPrint(msg);
+	}
+}
+
+bool list_stream_clients(CBasePlayer* plr, const CommandArgs& args) {
+	std::vector<StreamClientInfo> clients = g_sventv->getStreamClients();
+
+	printStreamInfo(plr, UTIL_VarArgs("%d HLTV stream client(s)\n", (int)clients.size()));
+	if (clients.empty()) {
+		return true;
+	}
+
+	printStreamInfo(plr, UTIL_VarArgs("    %-22s %-11s %8s %10s %7s\n", "Address", "State", "Time", "Sent (MB)", "Behind"));
+	for (int i = 0; i < (int)clients.size(); i++) {
+		const StreamClientInfo& c = clients[i];
+		printStreamInfo(plr, UTIL_VarArgs("%2d) %-22s %-11s %5d:%02d %10.1f %7d\n", i + 1, c.address.c_str(), c.state,
+			(int)(c.seconds / 60), (int)(c.seconds % 60), c.bytesSent / (1024.0f * 1024.0f), (int)c.behind));
+	}
+	return true;
+}
+
 bool seek_demo(CBasePlayer* plr, const CommandArgs& args) {
 	std::string offset = args.ArgV(1);
 	int seekPos = atoi(offset.c_str());
@@ -593,7 +629,7 @@ HOOK_RET_VOID ClientCommand(edict_t* pEntity)
 	edict_t* pEntity = pPlayer->edict();
 #endif
 
-	if (g_sventv->enableDemoFile || g_sventv->enableServer) {
+	if (g_sventv->isCapturing()) {
 		string lowerArg0 = toLowerCase(CMD_ARGV(0));
 		string cmd = CMD_ARGC() > 1 ? CMD_ARGS() : "";
 		cmd = CMD_ARGV(0) + string(" ") + cmd;
@@ -617,7 +653,7 @@ HOOK_RET_VOID PlaybackEvent(int flags, const edict_t* pInvoker, unsigned short e
 	float* origin, float* angles, float fparam1, float fparam2,
 	int iparam1, int iparam2, int bparam1, int bparam2) {
 	
-	if (!g_sventv->enableDemoFile && !g_sventv->enableServer) {
+	if (!g_sventv->isCapturing()) {
 		DEFAULT_HOOK_RETURN;
 	}
 
@@ -786,7 +822,7 @@ HOOK_RET_VOID UpdateClientDataPost(const edict_t* ent, int sendweapons, clientda
 }
 
 HOOK_RET_VOID CmdStartHook(const edict_t* player, const struct usercmd_s* cmd, unsigned int random_seed) {
-	if (!g_write_user_cmds->value || (!g_sventv->enableDemoFile && !g_sventv->enableServer)) {
+	if (!g_write_user_cmds->value || (!g_sventv->isCapturing())) {
 		DEFAULT_HOOK_RETURN;
 	}
 
@@ -947,6 +983,7 @@ extern "C" int DLLEXPORT PluginInit() {
 	RegisterPluginCommand(".demo", record_demo, FL_CMD_ANY | FL_CMD_ADMIN);
 	RegisterPluginCommand(".demostats", show_demo_stats, FL_CMD_CLIENT | FL_CMD_ADMIN);
 	RegisterPluginCommand(".replay", replay_demo, FL_CMD_ANY | FL_CMD_ADMIN);
+	RegisterPluginCommand(".democlients", list_stream_clients, FL_CMD_ANY | FL_CMD_ADMIN);
 	RegisterPluginCommand(".seek", seek_demo, FL_CMD_ANY | FL_CMD_ADMIN);
 	RegisterPluginCommand(".speed", set_demo_speed, FL_CMD_ANY | FL_CMD_ADMIN);
 	RegisterPluginCommand(".search", search_demo, FL_CMD_ANY | FL_CMD_ADMIN);
@@ -961,6 +998,10 @@ extern "C" int DLLEXPORT PluginInit() {
 	g_validate_output = RegisterPluginCVar("hltv.validate", "0", 0, 0);
 	g_write_debug_info = RegisterPluginCVar("hltv.debug_info", "1", 0, 0);
 	g_write_user_cmds = RegisterPluginCVar("hltv.write_user_cmds", "0", 0, 0);
+	g_stream = RegisterPluginCVar("hltv.stream", "0", 0, 0);
+	g_stream_port = RegisterPluginCVar("hltv.stream_port", "28015", 28015, 0);
+	g_stream_frames = RegisterPluginCVar("hltv.stream_frames", "7200", 7200, 0);
+	g_stream_password = RegisterPluginCVar("hltv.stream_password", "", 0, 0);
 #else
 	g_main_thread_id = std::this_thread::get_id();
 
