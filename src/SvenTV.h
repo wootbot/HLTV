@@ -36,6 +36,7 @@ public:
 
 	volatile bool enableServer = false;
 	volatile bool enableDemoFile = false;
+	volatile bool enableStream = false; // send demo frames to clients over TCP
 
 	SvenTV(bool singleThreadMode);
 	~SvenTV();
@@ -45,6 +46,15 @@ public:
 
 	// millis since recording started
 	uint32_t getRecordingTime();
+
+	// true if the server should capture game data for a demo file or stream
+	bool isCapturing() { return enableDemoFile || enableServer || enableStream; }
+
+	// call when the map ends. Viewers get disconnected and will rejoin on the next map.
+	void endStreamSession();
+
+	void setStreamPassword(const char* password);
+	std::vector<StreamClientInfo> getStreamClients();
 
 private:
 	// main thread vars
@@ -73,6 +83,8 @@ private:
 	void handleDeltaAck(mstream& reader, NetClient& client);
 
 	void broadcastEntityStates();
+
+	void updateStreamSocket();
 };
 
 

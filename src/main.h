@@ -81,6 +81,10 @@ extern cvar_t* g_min_storage_megabytes;
 extern cvar_t* g_max_demo_megabytes;
 extern cvar_t* g_compress_demos;
 extern cvar_t* g_validate_output;
+extern cvar_t* g_stream;
+extern cvar_t* g_stream_port;
+extern cvar_t* g_stream_frames;
+extern cvar_t* g_stream_password;
 extern cvar_t* g_write_debug_info;
 
 extern int g_copyTime;
