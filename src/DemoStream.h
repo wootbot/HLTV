@@ -21,6 +21,14 @@
 //     STREAM_PKT_FRAME:  one demo frame, same bytes as in a demo file
 //     STREAM_PKT_POOL:   uint16 offset + bytes appended to the string pool
 //     STREAM_PKT_AUTH_FAILED: no payload. The password was wrong and the server will disconnect.
+//     STREAM_PKT_CAMERAS: the camera entities of viewers who logged in with a website token (see
+//       SpecCameras.h). uint16 entity of your own camera (0 = none), uint16 count, then for each:
+//       uint16 entity, uint8 top color, uint8 bottom color, uint8 name length, name.
+//       Sent when the cameras change, and after STREAM_PKT_HEADER.
+// After logging in, clients can send packets of the same form:
+//     CLIENT_PKT_CAMERA: float origin[3] + float view angles[3] (pitch, yaw, roll). Where the viewer
+//       is looking from. The server makes a camera entity there for viewers with a token login.
+// Older clients and servers skip packet types they don't know, so new types don't change the version.
 // The server closes the connection when the session ends (map change, new recording).
 
 #define HLTV_STREAM_MAGIC "HLTVLIVE"
@@ -31,9 +39,15 @@ enum stream_packet_types {
 	STREAM_PKT_FRAME = 2,
 	STREAM_PKT_POOL = 3,
 	STREAM_PKT_AUTH_FAILED = 4,
+	STREAM_PKT_CAMERAS = 5,
+};
+
+enum stream_client_packet_types {
+	CLIENT_PKT_CAMERA = 1,
 };
 
 struct StreamClientInfo {
+	uint64_t id; // unique for each connection
 	std::string address;
 	const char* state;
 	bool authed; // gave the password or a valid token, so watching or waiting for the next session
@@ -41,6 +55,19 @@ struct StreamClientInfo {
 	uint64_t bytesSent;
 	uint64_t behind; // packets waiting to be sent
 	uint64_t steamid64; // logged in with a website session token. 0 if they used the password.
+	bool joined; // receiving the current session
+	bool hasCamera; // the client sent where it's looking from
+	float camOrigin[3];
+	float camAngles[3]; // view angles
+};
+
+// a viewer's camera entity in the game
+struct StreamCamera {
+	uint64_t clientId;
+	uint16_t entindex;
+	uint8_t topColor;
+	uint8_t bottomColor;
+	std::string name;
 };
 
 // A password that didn't match the stream password, which might be a website session token. Only
@@ -80,6 +107,7 @@ public:
 	std::vector<StreamClientInfo> getClients();
 	std::vector<StreamTokenCheck> takeTokenChecks();
 	void finishTokenChecks(const std::vector<StreamTokenCheck>& results);
+	void setCameras(const std::vector<StreamCamera>& cameras); // sent to clients when they change
 
 private:
 	typedef std::shared_ptr<std::vector<uint8_t>> Segment;
@@ -103,6 +131,12 @@ private:
 		uint64_t steamid64 = 0; // logged in with a session token
 		bool rejected = false; // wrong password, waiting out the delay
 		bool closing = false; // disconnect once the prefix is sent
+
+		std::vector<uint8_t> inBuf; // client packets received after logging in
+		bool hasCamera = false;
+		float camOrigin[3] = { 0, 0, 0 };
+		float camAngles[3] = { 0, 0, 0 };
+		uint64_t camerasSent = 0; // version of the camera list this client was sent
 	};
 
 	struct KeyframeMark {
@@ -121,6 +155,8 @@ private:
 	std::vector<StreamTokenCheck> tokenChecks; // waiting for the main thread
 	std::vector<StreamTokenCheck> tokenResults; // checked by the main thread
 	std::vector<StreamClientInfo> clientInfo; // copy of the client states for other threads
+	std::vector<StreamCamera> cameras;
+	uint64_t camerasVersion = 1;
 
 	bool sessionActive = false;
 	std::vector<uint8_t> header; // kept up to date with the string pool for late joiners
@@ -137,6 +173,8 @@ private:
 	void closeClient(Client& client);
 	bool flushClient(Client& client); // false if the client should be dropped
 	bool readAuth(Client& client); // false if the client should be dropped
+	bool readClientPackets(Client& client); // false if the client should be dropped
+	void sendCameras(Client& client);
 	void acceptClient(Client& client);
 	void rejectClient(Client& client, uint64_t now);
 	void applyTokenResults();

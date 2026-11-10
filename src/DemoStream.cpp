@@ -22,6 +22,7 @@
 #include "main.h"
 #include "DemoStream.h"
 #include <string.h>
+#include <math.h>
 #include <algorithm>
 #include <string>
 
@@ -30,6 +31,8 @@
 #define MAX_PASSWORD_LEN 256 // website session tokens are 172 characters
 #define AUTH_TIMEOUT_MS 5000
 #define AUTH_FAIL_DELAY_MS 2000 // with the client limit, this caps how fast passwords can be guessed
+#define MAX_CLIENT_PACKET 1024
+#define MAX_COORD 131072.0f
 
 static void setNonBlocking(intptr_t sock) {
 #ifdef WIN32
@@ -205,6 +208,8 @@ void DemoStream::joinSession(Client& client) {
 
 	Segment seg = makeSegment(STREAM_PKT_HEADER, &backlog, sizeof(backlog), header.data(), header.size());
 	client.prefix.insert(client.prefix.end(), seg->begin(), seg->end());
+
+	client.camerasSent = 0; // send them again after the header
 }
 
 void DemoStream::closeClient(Client& client) {
@@ -232,6 +237,91 @@ std::vector<StreamTokenCheck> DemoStream::takeTokenChecks() {
 void DemoStream::finishTokenChecks(const std::vector<StreamTokenCheck>& results) {
 	std::lock_guard<std::mutex> guard(infoMutex);
 	tokenResults.insert(tokenResults.end(), results.begin(), results.end());
+}
+
+void DemoStream::setCameras(const std::vector<StreamCamera>& newCameras) {
+	std::lock_guard<std::mutex> guard(infoMutex);
+	cameras = newCameras;
+	camerasVersion++;
+}
+
+void DemoStream::sendCameras(Client& client) {
+	std::vector<uint8_t> payload(4);
+	uint16_t ownEnt = 0;
+	uint16_t count = 0;
+	{
+		std::lock_guard<std::mutex> guard(infoMutex);
+		if (client.camerasSent == camerasVersion) {
+			return;
+		}
+		client.camerasSent = camerasVersion;
+
+		for (const StreamCamera& cam : cameras) {
+			if (cam.clientId == client.id) {
+				ownEnt = cam.entindex;
+			}
+			uint8_t nameLen = (uint8_t)(std::min)(cam.name.size(), (size_t)255);
+			uint8_t entry[5];
+			memcpy(entry, &cam.entindex, 2);
+			entry[2] = cam.topColor;
+			entry[3] = cam.bottomColor;
+			entry[4] = nameLen;
+			payload.insert(payload.end(), entry, entry + 5);
+			payload.insert(payload.end(), cam.name.begin(), cam.name.begin() + nameLen);
+			count++;
+		}
+	}
+	memcpy(payload.data(), &ownEnt, 2);
+	memcpy(payload.data() + 2, &count, 2);
+
+	Segment seg = makeSegment(STREAM_PKT_CAMERAS, NULL, 0, payload.data(), payload.size());
+	client.prefix.insert(client.prefix.end(), seg->begin(), seg->end());
+}
+
+bool DemoStream::readClientPackets(Client& client) {
+	char buf[1024];
+	while (client.inBuf.size() < MAX_CLIENT_PACKET * 4) {
+		int got = recv(client.sock, buf, sizeof(buf), 0);
+		if (got == 0 || (got == SOCKET_ERROR && !SOCK_WOULD_BLOCK)) {
+			return false; // disconnected
+		}
+		if (got < 0) {
+			break; // nothing more to read
+		}
+		client.inBuf.insert(client.inBuf.end(), buf, buf + got);
+	}
+
+	size_t pos = 0;
+	while (client.inBuf.size() - pos >= 5) {
+		uint8_t type = client.inBuf[pos];
+		uint32_t sz = 0;
+		memcpy(&sz, client.inBuf.data() + pos + 1, 4);
+		if (sz > MAX_CLIENT_PACKET) {
+			return false;
+		}
+		if (client.inBuf.size() - pos - 5 < sz) {
+			break;
+		}
+		const uint8_t* payload = client.inBuf.data() + pos + 5;
+
+		if (type == CLIENT_PKT_CAMERA && sz >= 24) {
+			float vals[6];
+			memcpy(vals, payload, 24);
+			bool valid = true;
+			for (int i = 0; i < 6; i++) {
+				valid = valid && vals[i] == vals[i] && fabsf(vals[i]) <= MAX_COORD; // not NaN or huge
+			}
+			if (valid) {
+				memcpy(client.camOrigin, vals, 12);
+				memcpy(client.camAngles, vals + 3, 12);
+				client.hasCamera = true;
+			}
+		}
+
+		pos += 5 + sz;
+	}
+	client.inBuf.erase(client.inBuf.begin(), client.inBuf.begin() + pos);
+	return true;
 }
 
 void DemoStream::applyTokenResults() {
@@ -287,6 +377,7 @@ void DemoStream::updateClientInfo() {
 	clientInfo.clear();
 	for (const Client& client : clients) {
 		StreamClientInfo info;
+		info.id = client.id;
 		info.address = client.address;
 		info.state = client.joined ? "watching" : (client.authed ? "waiting" : "logging in");
 		info.steamid64 = client.steamid64;
@@ -294,6 +385,10 @@ void DemoStream::updateClientInfo() {
 		info.seconds = (uint32_t)((now - client.connectTime) / 1000);
 		info.bytesSent = client.bytesSent;
 		info.behind = client.joined ? (firstSeq + ring.size()) - client.nextSeq : 0;
+		info.joined = client.joined;
+		info.hasCamera = client.hasCamera;
+		memcpy(info.camOrigin, client.camOrigin, sizeof(info.camOrigin));
+		memcpy(info.camAngles, client.camAngles, sizeof(info.camAngles));
 		clientInfo.push_back(info);
 	}
 }
@@ -378,12 +473,12 @@ bool DemoStream::flushClient(Client& client) {
 			return false;
 		}
 	}
-	else {
-		char discard[256];
-		int got = recv(client.sock, discard, sizeof(discard), 0);
-		if (got == 0 || (got == SOCKET_ERROR && !SOCK_WOULD_BLOCK)) {
-			return false; // disconnected
-		}
+	else if (!readClientPackets(client)) {
+		return false;
+	}
+
+	if (client.joined) {
+		sendCameras(client);
 	}
 
 	if (client.joined && client.nextSeq < firstSeq) {
@@ -396,7 +491,8 @@ bool DemoStream::flushClient(Client& client) {
 	while (budget > 0) {
 		const uint8_t* data;
 		size_t remaining;
-		bool isPrefix = client.prefixSent < client.prefix.size();
+		// the prefix can grow while a frame is half sent, so it waits for the frame to finish
+		bool isPrefix = client.prefixSent < client.prefix.size() && client.segmentSent == 0;
 
 		if (isPrefix) {
 			data = client.prefix.data() + client.prefixSent;

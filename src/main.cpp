@@ -2,6 +2,7 @@
 #include <string>
 #include "ThreadSafeInt.h"
 #include "SvenTV.h"
+#include "SpecCameras.h"
 
 #ifndef HLCOOP_BUILD
 #include "mmlib.h"
@@ -223,6 +224,9 @@ HOOK_RET_VOID Changelevel() {
 		g_server_frame_count = 0;
 		g_playerModels.clear();
 	}
+#ifdef HLCOOP_BUILD
+	specCamerasMapEnd();
+#endif
 
 	memset(g_playerSprays, 0, sizeof(PlayerSpray)*32);
 
@@ -247,6 +251,9 @@ HOOK_RET_VOID MapInitHook(edict_t * pEdictList, int edictCount, int maxClients)
 	memset(g_stringpool, 0, STRING_POOL_SIZE);
 	g_stringpool_idx = 1; // 0 index is for NULL strings
 	g_stringtToClassIdx.clear();
+#ifdef HLCOOP_BUILD
+	specCamerasMapInit();
+#endif
 
 	DEFAULT_HOOK_RETURN;
 }
@@ -337,6 +344,7 @@ HOOK_RET_VOID StartFrameHook() {
 	g_sventv->setStreamPassword(g_stream_password->string);
 #ifdef HLCOOP_BUILD
 	checkStreamTokens();
+	updateSpecCameras();
 #endif
 
 	static float lastStats = 0;
@@ -1043,6 +1051,9 @@ extern "C" int DLLEXPORT PluginInit() {
 	RegisterPluginCommand(".seek", seek_demo, FL_CMD_ANY | FL_CMD_ADMIN);
 	RegisterPluginCommand(".speed", set_demo_speed, FL_CMD_ANY | FL_CMD_ADMIN);
 	RegisterPluginCommand(".search", search_demo, FL_CMD_ANY | FL_CMD_ADMIN);
+#ifdef HLCOOP_BUILD
+	RegisterPluginCommand(".showspecs", cmd_showspecs, FL_CMD_CLIENT);
+#endif
 
 #ifdef HLCOOP_BUILD
 	// start writing demo file automatically when map starts, if 1
