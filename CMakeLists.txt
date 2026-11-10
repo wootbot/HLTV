@@ -14,7 +14,7 @@ set(SOURCE
 	src/NetClient.h src/NetClient.cpp
 	src/netedict.h src/netedict.cpp
 	src/DemoFile.h src/DemoFile.cpp
-	src/SpecCameras.h src/SpecCameras.cpp
+	src/StreamViewers.h src/StreamViewers.cpp
 	src/playerdb.h
 	
 )

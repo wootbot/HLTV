@@ -2,7 +2,7 @@
 #include <string>
 #include "ThreadSafeInt.h"
 #include "SvenTV.h"
-#include "SpecCameras.h"
+#include "StreamViewers.h"
 
 #ifndef HLCOOP_BUILD
 #include "mmlib.h"
@@ -225,7 +225,7 @@ HOOK_RET_VOID Changelevel() {
 		g_playerModels.clear();
 	}
 #ifdef HLCOOP_BUILD
-	specCamerasMapEnd();
+	streamViewersMapEnd();
 #endif
 
 	memset(g_playerSprays, 0, sizeof(PlayerSpray)*32);
@@ -252,7 +252,7 @@ HOOK_RET_VOID MapInitHook(edict_t * pEdictList, int edictCount, int maxClients)
 	g_stringpool_idx = 1; // 0 index is for NULL strings
 	g_stringtToClassIdx.clear();
 #ifdef HLCOOP_BUILD
-	specCamerasMapInit();
+	streamViewersMapInit();
 #endif
 
 	DEFAULT_HOOK_RETURN;
@@ -344,7 +344,7 @@ HOOK_RET_VOID StartFrameHook() {
 	g_sventv->setStreamPassword(g_stream_password->string);
 #ifdef HLCOOP_BUILD
 	checkStreamTokens();
-	updateSpecCameras();
+	updateStreamViewers();
 #endif
 
 	static float lastStats = 0;

@@ -209,7 +209,7 @@ void DemoStream::joinSession(Client& client) {
 	Segment seg = makeSegment(STREAM_PKT_HEADER, &backlog, sizeof(backlog), header.data(), header.size());
 	client.prefix.insert(client.prefix.end(), seg->begin(), seg->end());
 
-	client.camerasSent = 0; // send them again after the header
+	client.viewersSent = 0; // send the viewer list again after the header
 }
 
 void DemoStream::closeClient(Client& client) {
@@ -239,42 +239,42 @@ void DemoStream::finishTokenChecks(const std::vector<StreamTokenCheck>& results)
 	tokenResults.insert(tokenResults.end(), results.begin(), results.end());
 }
 
-void DemoStream::setCameras(const std::vector<StreamCamera>& newCameras) {
+void DemoStream::setViewers(const std::vector<StreamViewer>& newViewers) {
 	std::lock_guard<std::mutex> guard(infoMutex);
-	cameras = newCameras;
-	camerasVersion++;
+	viewers = newViewers;
+	viewersVersion++;
 }
 
-void DemoStream::sendCameras(Client& client) {
-	std::vector<uint8_t> payload(4);
-	uint16_t ownEnt = 0;
+void DemoStream::sendViewers(Client& client) {
+	std::vector<uint8_t> payload(2);
 	uint16_t count = 0;
+	uint16_t others = 0;
 	{
 		std::lock_guard<std::mutex> guard(infoMutex);
-		if (client.camerasSent == camerasVersion) {
+		if (client.viewersSent == viewersVersion) {
 			return;
 		}
-		client.camerasSent = camerasVersion;
+		client.viewersSent = viewersVersion;
 
-		for (const StreamCamera& cam : cameras) {
-			if (cam.clientId == client.id) {
-				ownEnt = cam.entindex;
-			}
-			uint8_t nameLen = (uint8_t)(std::min)(cam.name.size(), (size_t)255);
-			uint8_t entry[5];
-			memcpy(entry, &cam.entindex, 2);
-			entry[2] = cam.topColor;
-			entry[3] = cam.bottomColor;
-			entry[4] = nameLen;
-			payload.insert(payload.end(), entry, entry + 5);
-			payload.insert(payload.end(), cam.name.begin(), cam.name.begin() + nameLen);
+		for (const StreamViewer& viewer : viewers) {
+			uint8_t nameLen = (uint8_t)(std::min)(viewer.name.size(), (size_t)255);
+			uint8_t entry[10];
+			memcpy(entry, &viewer.entindex, 2);
+			entry[2] = viewer.topColor;
+			entry[3] = viewer.bottomColor;
+			entry[4] = viewer.clientId == client.id ? VIEWER_FL_YOU : 0;
+			memcpy(entry + 5, &viewer.delaySec, 4);
+			entry[9] = nameLen;
+			payload.insert(payload.end(), entry, entry + 10);
+			payload.insert(payload.end(), viewer.name.begin(), viewer.name.begin() + nameLen);
 			count++;
 		}
+		others = passwordViewers;
 	}
-	memcpy(payload.data(), &ownEnt, 2);
-	memcpy(payload.data() + 2, &count, 2);
+	memcpy(payload.data(), &count, 2);
+	payload.insert(payload.end(), (uint8_t*)&others, (uint8_t*)&others + 2);
 
-	Segment seg = makeSegment(STREAM_PKT_CAMERAS, NULL, 0, payload.data(), payload.size());
+	Segment seg = makeSegment(STREAM_PKT_VIEWERS, NULL, 0, payload.data(), payload.size());
 	client.prefix.insert(client.prefix.end(), seg->begin(), seg->end());
 }
 
@@ -304,7 +304,7 @@ bool DemoStream::readClientPackets(Client& client) {
 		}
 		const uint8_t* payload = client.inBuf.data() + pos + 5;
 
-		if (type == CLIENT_PKT_CAMERA && sz >= 24) {
+		if (type == CLIENT_PKT_VIEW && sz >= 28) {
 			float vals[6];
 			memcpy(vals, payload, 24);
 			bool valid = true;
@@ -314,6 +314,7 @@ bool DemoStream::readClientPackets(Client& client) {
 			if (valid) {
 				memcpy(client.camOrigin, vals, 12);
 				memcpy(client.camAngles, vals + 3, 12);
+				memcpy(&client.delayMs, payload + 24, 4);
 				client.hasCamera = true;
 			}
 		}
@@ -389,6 +390,7 @@ void DemoStream::updateClientInfo() {
 		info.hasCamera = client.hasCamera;
 		memcpy(info.camOrigin, client.camOrigin, sizeof(info.camOrigin));
 		memcpy(info.camAngles, client.camAngles, sizeof(info.camAngles));
+		info.delayMs = client.delayMs;
 		clientInfo.push_back(info);
 	}
 }
@@ -478,7 +480,7 @@ bool DemoStream::flushClient(Client& client) {
 	}
 
 	if (client.joined) {
-		sendCameras(client);
+		sendViewers(client);
 	}
 
 	if (client.joined && client.nextSeq < firstSeq) {
@@ -579,6 +581,18 @@ void DemoStream::think() {
 	}
 
 	applyTokenResults();
+
+	uint16_t numPasswordViewers = 0;
+	for (const Client& client : clients) {
+		numPasswordViewers += client.authed && !client.steamid64;
+	}
+	{
+		std::lock_guard<std::mutex> guard(infoMutex);
+		if (numPasswordViewers != passwordViewers) {
+			passwordViewers = numPasswordViewers;
+			viewersVersion++;
+		}
+	}
 
 	clients.erase(std::remove_if(clients.begin(), clients.end(), [this](Client& client) {
 		if (!flushClient(client)) {

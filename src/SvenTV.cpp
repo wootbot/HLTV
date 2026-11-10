@@ -167,8 +167,8 @@ std::vector<StreamClientInfo> SvenTV::getStreamClients() {
 	return demoWriter->stream.getClients();
 }
 
-void SvenTV::setStreamCameras(const std::vector<StreamCamera>& cameras) {
-	demoWriter->stream.setCameras(cameras);
+void SvenTV::setStreamViewers(const std::vector<StreamViewer>& viewers) {
+	demoWriter->stream.setViewers(viewers);
 }
 
 void SvenTV::updateStreamSocket() {

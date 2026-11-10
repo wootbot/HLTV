@@ -1,5 +1,5 @@
 #include "netedict.h"
-#include "SpecCameras.h"
+#include "StreamViewers.h"
 #include "DemoFile.h"
 #include "main.h"
 #include "DemoPlayer.h"
