@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HLCOOP_BUILD
 #include "extdll.h"
+#include "sevenkewp_compat.h"
 #else
 #include "mmlib.h"
 #endif
