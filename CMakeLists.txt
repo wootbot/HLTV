@@ -13,6 +13,7 @@ set(SOURCE
 	src/DemoStats.h src/DemoStats.cpp
 	src/NetClient.h src/NetClient.cpp
 	src/netedict.h src/netedict.cpp
+	src/sevenkewp_compat.h
 	src/DemoFile.h src/DemoFile.cpp
 	
 )
