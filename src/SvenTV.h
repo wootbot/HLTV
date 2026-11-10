@@ -58,6 +58,7 @@ public:
 	std::vector<StreamTokenCheck> takeStreamTokenChecks();
 	void finishStreamTokenChecks(const std::vector<StreamTokenCheck>& results);
 	std::vector<StreamClientInfo> getStreamClients();
+	void setStreamViewers(const std::vector<StreamViewer>& viewers);
 
 private:
 	// main thread vars

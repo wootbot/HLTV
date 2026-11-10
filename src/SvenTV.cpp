@@ -167,6 +167,10 @@ std::vector<StreamClientInfo> SvenTV::getStreamClients() {
 	return demoWriter->stream.getClients();
 }
 
+void SvenTV::setStreamViewers(const std::vector<StreamViewer>& viewers) {
+	demoWriter->stream.setViewers(viewers);
+}
+
 void SvenTV::updateStreamSocket() {
 	if (g_stream && g_stream->value > 0) {
 		demoWriter->stream.listen((uint16_t)g_stream_port->value);

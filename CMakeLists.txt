@@ -15,6 +15,8 @@ set(SOURCE
 	src/netedict.h src/netedict.cpp
 	src/sevenkewp_compat.h
 	src/DemoFile.h src/DemoFile.cpp
+	src/StreamViewers.h src/StreamViewers.cpp
+	src/playerdb.h
 	
 )
 

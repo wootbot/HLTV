@@ -21,6 +21,16 @@
 //     STREAM_PKT_FRAME:  one demo frame, same bytes as in a demo file
 //     STREAM_PKT_POOL:   uint16 offset + bytes appended to the string pool
 //     STREAM_PKT_AUTH_FAILED: no payload. The password was wrong and the server will disconnect.
+//     STREAM_PKT_VIEWERS: who is watching (see StreamViewers.h). uint16 count, then for each viewer
+//       who logged in with a website token: uint16 camera entity (0 = none), uint8 top color,
+//       uint8 bottom color, uint8 VIEWER_FL_* flags, uint32 seconds behind live (rounded, 0 = live),
+//       uint8 name length, name. Viewers who used the stream password aren't listed.
+//       Sent when it changes, and after STREAM_PKT_HEADER.
+// After logging in, clients can send packets of the same form:
+//     CLIENT_PKT_VIEW: float origin[3] + float view angles[3] (pitch, yaw, roll) + uint32 millis
+//       behind live (0 = live). Where the viewer is looking from. The server makes a camera entity
+//       there for viewers with a token login.
+// Older clients and servers skip packet types they don't know, so new types don't change the version.
 // The server closes the connection when the session ends (map change, new recording).
 
 #define HLTV_STREAM_MAGIC "HLTVLIVE"
@@ -31,9 +41,17 @@ enum stream_packet_types {
 	STREAM_PKT_FRAME = 2,
 	STREAM_PKT_POOL = 3,
 	STREAM_PKT_AUTH_FAILED = 4,
+	STREAM_PKT_VIEWERS = 5,
 };
 
+enum stream_client_packet_types {
+	CLIENT_PKT_VIEW = 1,
+};
+
+#define VIEWER_FL_YOU 1 // the viewer this packet was sent to
+
 struct StreamClientInfo {
+	uint64_t id; // unique for each connection
 	std::string address;
 	const char* state;
 	bool authed; // gave the password or a valid token, so watching or waiting for the next session
@@ -41,6 +59,26 @@ struct StreamClientInfo {
 	uint64_t bytesSent;
 	uint64_t behind; // packets waiting to be sent
 	uint64_t steamid64; // logged in with a website session token. 0 if they used the password.
+	bool joined; // receiving the current session
+	bool hasCamera; // the client sent where it's looking from
+	float camOrigin[3];
+	float camAngles[3]; // view angles
+	uint32_t delayMs; // how far behind live the client is watching
+};
+
+// a viewer who logged in with a website token
+struct StreamViewer {
+	uint64_t clientId;
+	uint16_t entindex; // camera entity, or 0
+	uint8_t topColor;
+	uint8_t bottomColor;
+	uint32_t delaySec; // rounded, so this doesn't change constantly
+	std::string name;
+
+	bool operator==(const StreamViewer& o) const {
+		return clientId == o.clientId && entindex == o.entindex && topColor == o.topColor
+			&& bottomColor == o.bottomColor && delaySec == o.delaySec && name == o.name;
+	}
 };
 
 // A password that didn't match the stream password, which might be a website session token. Only
@@ -80,6 +118,7 @@ public:
 	std::vector<StreamClientInfo> getClients();
 	std::vector<StreamTokenCheck> takeTokenChecks();
 	void finishTokenChecks(const std::vector<StreamTokenCheck>& results);
+	void setViewers(const std::vector<StreamViewer>& viewers); // sent to clients when they change
 
 private:
 	typedef std::shared_ptr<std::vector<uint8_t>> Segment;
@@ -103,6 +142,13 @@ private:
 		uint64_t steamid64 = 0; // logged in with a session token
 		bool rejected = false; // wrong password, waiting out the delay
 		bool closing = false; // disconnect once the prefix is sent
+
+		std::vector<uint8_t> inBuf; // client packets received after logging in
+		bool hasCamera = false;
+		float camOrigin[3] = { 0, 0, 0 };
+		float camAngles[3] = { 0, 0, 0 };
+		uint32_t delayMs = 0;
+		uint64_t viewersSent = 0; // version of the viewer list this client was sent
 	};
 
 	struct KeyframeMark {
@@ -121,6 +167,8 @@ private:
 	std::vector<StreamTokenCheck> tokenChecks; // waiting for the main thread
 	std::vector<StreamTokenCheck> tokenResults; // checked by the main thread
 	std::vector<StreamClientInfo> clientInfo; // copy of the client states for other threads
+	std::vector<StreamViewer> viewers;
+	uint64_t viewersVersion = 1;
 
 	bool sessionActive = false;
 	std::vector<uint8_t> header; // kept up to date with the string pool for late joiners
@@ -137,6 +185,8 @@ private:
 	void closeClient(Client& client);
 	bool flushClient(Client& client); // false if the client should be dropped
 	bool readAuth(Client& client); // false if the client should be dropped
+	bool readClientPackets(Client& client); // false if the client should be dropped
+	void sendViewers(Client& client);
 	void acceptClient(Client& client);
 	void rejectClient(Client& client, uint64_t now);
 	void applyTokenResults();

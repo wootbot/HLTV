@@ -1,4 +1,5 @@
 #include "netedict.h"
+#include "StreamViewers.h"
 #include "DemoFile.h"
 #include "main.h"
 #include "DemoPlayer.h"
@@ -222,7 +223,9 @@ void netedict::load(const edict_t& ed, int idx) {
 		isPlayer = true;
 	}
 	else {
-		isValid = !ed.free && ed.pvPrivateData && (vars.effects & EF_NODRAW) == 0 && vars.modelindex;
+		// spectator cameras are hidden from players who didn't turn them on, but never from the demo
+		isValid = !ed.free && ed.pvPrivateData && vars.modelindex
+			&& ((vars.effects & EF_NODRAW) == 0 || isSpecCamera(ed));
 	}
 
 	if (!isValid) {
@@ -233,6 +236,9 @@ void netedict::load(const edict_t& ed, int idx) {
 	skin = vars.skin;
 	body = vars.body;
 	effects = vars.effects;
+	if ((effects & EF_NODRAW) && !isPlayer && isSpecCamera(ed)) {
+		effects &= ~EF_NODRAW;
+	}
 	gait = vars.gaitsequence;
 	blend = vars.blending[0];
 	int8_t newFramerate = V_clamp(vars.framerate * 16.0f, INT8_MIN, INT8_MAX);
