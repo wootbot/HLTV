@@ -19,6 +19,13 @@ bool isSpecCamera(const edict_t& ed) {
 #define SCOREBOARD_UPDATE_SECONDS 1.0f
 #define MAX_SLOT_NAME 31
 
+#ifndef DEFAULT_TEAM_NAME
+#define DEFAULT_TEAM_NAME "Team"
+#endif
+#ifndef ENEMY_TEAM_NAME
+#define ENEMY_TEAM_NAME "Bad Guys"
+#endif
+
 extern SvenTV* g_sventv;
 extern bool g_pause_message_logging;
 
@@ -67,6 +74,7 @@ static std::unordered_set<uint64_t> g_showSpecs;
 // scoreboard names sent to each player for each empty slot. [receiver][slot], "" = nothing sent
 static std::string g_sentSlotNames[MAX_PLAYERS + 1][MAX_PLAYERS + 1];
 static int g_receiverUserIds[MAX_PLAYERS + 1];
+static bool g_sentTeamNames[MAX_PLAYERS + 1]; // renamed the green team for the receiver
 static float g_lastScoreboardUpdate = 0;
 
 void streamViewersMapInit() {
@@ -77,6 +85,7 @@ void streamViewersMapInit() {
 
 	// clients forget all player info when the map changes
 	for (int i = 0; i <= MAX_PLAYERS; i++) {
+		g_sentTeamNames[i] = false;
 		for (int k = 0; k <= MAX_PLAYERS; k++) {
 			g_sentSlotNames[i][k].clear();
 		}
@@ -211,6 +220,20 @@ static void sendSlot(CBasePlayer* to, int slot, const std::string& name) {
 	g_pause_message_logging = false;
 }
 
+// The scoreboard labels each team with the name of its color, not the team name in TeamInfo.
+// These are the names the game sends when a player joins, except green becomes the viewers' team.
+static void sendTeamNames(CBasePlayer* to) {
+	g_pause_message_logging = true; // not part of the demo
+	MESSAGE_BEGIN(MSG_ONE, g_umsg.TeamNames, NULL, to->edict());
+	WRITE_BYTE(4);
+	WRITE_STRING(DEFAULT_TEAM_NAME); // blue
+	WRITE_STRING(ENEMY_TEAM_NAME); // red
+	WRITE_STRING(DEFAULT_TEAM_NAME); // yellow
+	WRITE_STRING(WEB_SPEC_TEAM); // green (WEB_SPEC_COLOR)
+	MESSAGE_END();
+	g_pause_message_logging = false;
+}
+
 // Lists the viewers in empty player slots. The highest slots are used so that the team sorts below
 // the players when scores are tied. If the server is full, nothing is shown.
 static void updateScoreboard() {
@@ -252,6 +275,7 @@ static void updateScoreboard() {
 		if (userid != g_receiverUserIds[r]) {
 			// a different player, who hasn't been sent anything
 			g_receiverUserIds[r] = userid;
+			g_sentTeamNames[r] = false;
 			for (int s = 0; s <= MAX_PLAYERS; s++) {
 				g_sentSlotNames[r][s].clear();
 			}
@@ -259,6 +283,11 @@ static void updateScoreboard() {
 
 		if (!plr || (plr->pev->flags & FL_FAKECLIENT) || plr->m_fInitHUD) {
 			continue;
+		}
+
+		if (!g_sentTeamNames[r]) {
+			sendTeamNames(plr);
+			g_sentTeamNames[r] = true;
 		}
 
 		for (int s = 1; s <= gpGlobals->maxClients && s <= MAX_PLAYERS; s++) {
