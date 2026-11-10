@@ -52,13 +52,14 @@ struct HltvUserMessageIds {
 	int SayText;
 	int ScoreInfo;
 	int TeamInfo;
+	int TeamNames;
 	int DeathMsg;
 	int StatusText;
 	int StatusValue;
 };
 
 inline HltvUserMessageIds hltv_user_message_ids() {
-	return { gmsgSayText, gmsgScoreInfo, gmsgTeamInfo, gmsgDeathMsg, gmsgStatusText, gmsgStatusValue };
+	return { gmsgSayText, gmsgScoreInfo, gmsgTeamInfo, gmsgTeamNames, gmsgDeathMsg, gmsgStatusText, gmsgStatusValue };
 }
 
 #define g_umsg hltv_user_message_ids()
