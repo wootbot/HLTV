@@ -36,7 +36,7 @@ extern bool g_pause_message_logging;
 PluginFuncHandle<const char*, uint64_t> g_func_web_name("HLCoop", "get_web_name_for_id");
 PluginFuncHandle<void, void*, uint64_t, const char*, const char*, uint8_t> g_func_web_chat("HLCoop", "send_webserver_chat");
 
-#define WEBMSG_CHAT_TYPE_SERVER 3 // from HLCoop's web_util.h
+#define WEBMSG_CHAT_TYPE_WEB_USER 2 // from HLCoop's web_util.h
 
 class CHltvCamera : public CBaseEntity {
 public:
@@ -352,18 +352,30 @@ static void updateScoreboard() {
 	}
 }
 
-// Says in the game's chat and the website's chat that someone started or stopped watching.
-// The website replaces ;name; with the user's name, linked to their profile.
+// Says in the game's chat and the website's chat that someone started or stopped watching, like
+// the game's own spectating messages: "(WEB) <name> is now spectating" / "... stopped spectating".
 static void announceWatcher(uint64_t steamid64, const std::string& name, bool started) {
 	if (!g_stream_announce || g_stream_announce->value <= 0) {
 		return;
 	}
 
-	const char* action = started ? "started" : "stopped";
-	UTIL_ClientPrintAll(print_chat, UTIL_VarArgs("[HLTV] %s %s watching the live stream.\n", name.c_str(), action));
+	const char* action = started ? "is now spectating" : "stopped spectating";
 
-	std::string webmsg = UTIL_VarArgs("[HLTV] ;name; %s watching the live stream.", action);
-	g_func_web_chat.call(NULL, steamid64, name.c_str(), webmsg.c_str(), WEBMSG_CHAT_TYPE_SERVER);
+	// The name is green, like chat sent from the website. Like HLCoop's web chat relay, this
+	// briefly gives a player the viewer's name and team color, so the message needs a player
+	// to send it, and there's nobody to tell if there isn't one.
+	CBasePlayer* anyPlayer = NULL;
+	for (int i = 1; i <= gpGlobals->maxClients && !anyPlayer; i++) {
+		anyPlayer = UTIL_PlayerByIndex(i);
+	}
+	if (anyPlayer) {
+		std::string prefix = "(WEB) " + name + " ";
+		UTIL_ClientSay(anyPlayer, action, prefix.c_str(), false, NULL, 0, FRIEND_TEAM_COLOR, name.c_str());
+	}
+
+	// The website shows web users' names as a green "(WEB) <name>" in place of ;name;
+	std::string webmsg = std::string(";name; ") + action;
+	g_func_web_chat.call(NULL, steamid64, name.c_str(), webmsg.c_str(), WEBMSG_CHAT_TYPE_WEB_USER);
 }
 
 static void updateWatchers() {
