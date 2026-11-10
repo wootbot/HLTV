@@ -109,6 +109,28 @@ static void checkStreamTokens() {
 	}
 	g_sventv->finishStreamTokenChecks(checks);
 }
+
+// Lets other plugins (WebServer) see who is watching the live stream. Fills steamids with the
+// Steam ID of each viewer who logged in with a website token, or 0 for viewers who used the stream
+// password, and returns the number of viewers, which can be more than maxIds. Viewers between maps
+// still count. Call from the main thread.
+APIFUNC int get_stream_viewers(uint64_t* steamids, int maxIds) {
+	if (!g_sventv) {
+		return 0;
+	}
+
+	int count = 0;
+	for (const StreamClientInfo& client : g_sventv->getStreamClients()) {
+		if (!client.authed) {
+			continue;
+		}
+		if (count < maxIds) {
+			steamids[count] = client.steamid64;
+		}
+		count++;
+	}
+	return count;
+}
 #endif
 
 DemoStats g_stats;
