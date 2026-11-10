@@ -18,6 +18,15 @@ bool isSpecCamera(const edict_t& ed) {
 #define WEB_SPEC_COLOR 4 // green on the scoreboard (FRIEND_TEAM_COLOR)
 #define SCOREBOARD_UPDATE_SECONDS 1.0f
 #define MAX_SLOT_NAME 31
+#define MIN_CAMERA_LERP 0.02f // seconds to move a camera to a new view, if updates come quicker
+#define MAX_CAMERA_LERP 0.2f // ...or if they come slower
+
+#ifndef DEFAULT_TEAM_NAME
+#define DEFAULT_TEAM_NAME "Team"
+#endif
+#ifndef ENEMY_TEAM_NAME
+#define ENEMY_TEAM_NAME "Bad Guys"
+#endif
 
 extern SvenTV* g_sventv;
 extern bool g_pause_message_logging;
@@ -33,15 +42,10 @@ public:
 	void Spawn() {
 		Precache();
 		pev->solid = SOLID_NOT;
-		pev->movetype = MOVETYPE_NONE;
+		pev->movetype = MOVETYPE_NOCLIP; // interpolated by clients. It has no velocity, so it stays put
 		pev->effects |= EF_NODRAW;
 		SET_MODEL(edict(), SPEC_CAMERA_MODEL);
 		UTIL_SetSize(pev, Vector(-8, -8, -8), Vector(8, 8, 8));
-	}
-
-	int AddToFullPack(struct entity_state_s* state, CBasePlayer* player) {
-		state->movetype = MOVETYPE_NOCLIP; // enable interpolation on the client
-		return 1;
 	}
 };
 
@@ -56,6 +60,16 @@ struct WebViewer {
 	uint8_t bottomColor = 0;
 	uint32_t delaySec = 0;
 	EHANDLE h_camera;
+
+	// The camera glides from where it was to the latest view the viewer sent, over about as long
+	// as it took for that view to arrive. Views come in a few times a second, so jumping straight
+	// to each one would look choppy.
+	Vector viewOrigin; // latest view received
+	Vector viewAngles;
+	Vector startOrigin; // where the camera was when that view arrived
+	Vector startAngles;
+	float viewTime = 0; // when it arrived
+	float lerpTime = 0; // how long to take getting there
 };
 
 static std::vector<WebViewer> g_viewers;
@@ -67,6 +81,7 @@ static std::unordered_set<uint64_t> g_showSpecs;
 // scoreboard names sent to each player for each empty slot. [receiver][slot], "" = nothing sent
 static std::string g_sentSlotNames[MAX_PLAYERS + 1][MAX_PLAYERS + 1];
 static int g_receiverUserIds[MAX_PLAYERS + 1];
+static bool g_sentTeamNames[MAX_PLAYERS + 1]; // renamed the green team for the receiver
 static float g_lastScoreboardUpdate = 0;
 
 void streamViewersMapInit() {
@@ -77,6 +92,7 @@ void streamViewersMapInit() {
 
 	// clients forget all player info when the map changes
 	for (int i = 0; i <= MAX_PLAYERS; i++) {
+		g_sentTeamNames[i] = false;
 		for (int k = 0; k <= MAX_PLAYERS; k++) {
 			g_sentSlotNames[i][k].clear();
 		}
@@ -138,6 +154,7 @@ static void updateCamera(WebViewer& viewer, const StreamClientInfo& client, uint
 		return;
 	}
 
+	bool isNewCamera = !cam;
 	if (!cam) {
 		cam = CBaseEntity::Create(SPEC_CAMERA_CLASS, g_vecZero, g_vecZero);
 		if (!cam) {
@@ -149,9 +166,34 @@ static void updateCamera(WebViewer& viewer, const StreamClientInfo& client, uint
 	}
 
 	Vector origin(client.camOrigin[0], client.camOrigin[1], client.camOrigin[2]);
-	UTIL_SetOrigin(cam->pev, origin);
 	// model pitch is the opposite of view pitch
-	cam->pev->angles = Vector(-client.camAngles[0], client.camAngles[1], 0);
+	Vector angles(-client.camAngles[0], client.camAngles[1], 0);
+	float now = gpGlobals->time;
+
+	if (isNewCamera) {
+		viewer.startOrigin = viewer.viewOrigin = origin;
+		viewer.startAngles = viewer.viewAngles = angles;
+		viewer.viewTime = now;
+		viewer.lerpTime = 0;
+	}
+	else if (origin != viewer.viewOrigin || angles != viewer.viewAngles) {
+		viewer.startOrigin = cam->pev->origin; // carry on from wherever it is now
+		viewer.startAngles = cam->pev->angles;
+		viewer.lerpTime = V_min(V_max(now - viewer.viewTime, MIN_CAMERA_LERP), MAX_CAMERA_LERP);
+		viewer.viewOrigin = origin;
+		viewer.viewAngles = angles;
+		viewer.viewTime = now;
+	}
+
+	float t = viewer.lerpTime > 0 ? (now - viewer.viewTime) / viewer.lerpTime : 1;
+	t = V_min(V_max(t, 0.0f), 1.0f);
+	Vector camAngles;
+	for (int i = 0; i < 3; i++) {
+		float delta = UTIL_AngleDiff(viewer.viewAngles[i], viewer.startAngles[i]); // shortest way round
+		camAngles[i] = viewer.startAngles[i] + delta * t;
+	}
+	UTIL_SetOrigin(cam->pev, viewer.startOrigin + (viewer.viewOrigin - viewer.startOrigin) * t);
+	cam->pev->angles = camAngles;
 
 	// nobody sees EF_NODRAW entities, but the demo writer records cameras anyway
 	if (showMask) {
@@ -211,6 +253,20 @@ static void sendSlot(CBasePlayer* to, int slot, const std::string& name) {
 	g_pause_message_logging = false;
 }
 
+// The scoreboard labels each team with the name of its color, not the team name in TeamInfo.
+// These are the names the game sends when a player joins, except green becomes the viewers' team.
+static void sendTeamNames(CBasePlayer* to) {
+	g_pause_message_logging = true; // not part of the demo
+	MESSAGE_BEGIN(MSG_ONE, g_umsg.TeamNames, NULL, to->edict());
+	WRITE_BYTE(4);
+	WRITE_STRING(DEFAULT_TEAM_NAME); // blue
+	WRITE_STRING(ENEMY_TEAM_NAME); // red
+	WRITE_STRING(DEFAULT_TEAM_NAME); // yellow
+	WRITE_STRING(WEB_SPEC_TEAM); // green (WEB_SPEC_COLOR)
+	MESSAGE_END();
+	g_pause_message_logging = false;
+}
+
 // Lists the viewers in empty player slots. The highest slots are used so that the team sorts below
 // the players when scores are tied. If the server is full, nothing is shown.
 static void updateScoreboard() {
@@ -252,6 +308,7 @@ static void updateScoreboard() {
 		if (userid != g_receiverUserIds[r]) {
 			// a different player, who hasn't been sent anything
 			g_receiverUserIds[r] = userid;
+			g_sentTeamNames[r] = false;
 			for (int s = 0; s <= MAX_PLAYERS; s++) {
 				g_sentSlotNames[r][s].clear();
 			}
@@ -259,6 +316,11 @@ static void updateScoreboard() {
 
 		if (!plr || (plr->pev->flags & FL_FAKECLIENT) || plr->m_fInitHUD) {
 			continue;
+		}
+
+		if (!g_sentTeamNames[r]) {
+			sendTeamNames(plr);
+			g_sentTeamNames[r] = true;
 		}
 
 		for (int s = 1; s <= gpGlobals->maxClients && s <= MAX_PLAYERS; s++) {
