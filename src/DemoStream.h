@@ -24,7 +24,7 @@
 //     STREAM_PKT_VIEWERS: who is watching (see StreamViewers.h). uint16 count, then for each viewer
 //       who logged in with a website token: uint16 camera entity (0 = none), uint8 top color,
 //       uint8 bottom color, uint8 VIEWER_FL_* flags, uint32 seconds behind live (rounded, 0 = live),
-//       uint8 name length, name. Then uint16 number of viewers who used the stream password.
+//       uint8 name length, name. Viewers who used the stream password aren't listed.
 //       Sent when it changes, and after STREAM_PKT_HEADER.
 // After logging in, clients can send packets of the same form:
 //     CLIENT_PKT_VIEW: float origin[3] + float view angles[3] (pitch, yaw, roll) + uint32 millis
@@ -168,7 +168,6 @@ private:
 	std::vector<StreamTokenCheck> tokenResults; // checked by the main thread
 	std::vector<StreamClientInfo> clientInfo; // copy of the client states for other threads
 	std::vector<StreamViewer> viewers;
-	uint16_t passwordViewers = 0;
 	uint64_t viewersVersion = 1;
 
 	bool sessionActive = false;

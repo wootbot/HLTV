@@ -248,7 +248,6 @@ void DemoStream::setViewers(const std::vector<StreamViewer>& newViewers) {
 void DemoStream::sendViewers(Client& client) {
 	std::vector<uint8_t> payload(2);
 	uint16_t count = 0;
-	uint16_t others = 0;
 	{
 		std::lock_guard<std::mutex> guard(infoMutex);
 		if (client.viewersSent == viewersVersion) {
@@ -269,10 +268,8 @@ void DemoStream::sendViewers(Client& client) {
 			payload.insert(payload.end(), viewer.name.begin(), viewer.name.begin() + nameLen);
 			count++;
 		}
-		others = passwordViewers;
 	}
 	memcpy(payload.data(), &count, 2);
-	payload.insert(payload.end(), (uint8_t*)&others, (uint8_t*)&others + 2);
 
 	Segment seg = makeSegment(STREAM_PKT_VIEWERS, NULL, 0, payload.data(), payload.size());
 	client.prefix.insert(client.prefix.end(), seg->begin(), seg->end());
@@ -581,18 +578,6 @@ void DemoStream::think() {
 	}
 
 	applyTokenResults();
-
-	uint16_t numPasswordViewers = 0;
-	for (const Client& client : clients) {
-		numPasswordViewers += client.authed && !client.steamid64;
-	}
-	{
-		std::lock_guard<std::mutex> guard(infoMutex);
-		if (numPasswordViewers != passwordViewers) {
-			passwordViewers = numPasswordViewers;
-			viewersVersion++;
-		}
-	}
 
 	clients.erase(std::remove_if(clients.begin(), clients.end(), [this](Client& client) {
 		if (!flushClient(client)) {

@@ -9,7 +9,7 @@
 //
 // The scoreboard of players lists the viewers in empty player slots, under a "Web Spectators" team.
 // When there aren't enough slots, the last one says how many more viewers there are. Viewers who
-// used the stream password are only counted there, since their names aren't known.
+// used the stream password aren't shown anywhere, since their names aren't known.
 
 #define SPEC_CAMERA_CLASS "hltv_camera"
 #define SPEC_CAMERA_MODEL "models/hlcoop_v2/camera_v2.mdl"

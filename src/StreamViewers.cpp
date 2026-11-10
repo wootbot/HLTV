@@ -60,7 +60,6 @@ struct WebViewer {
 
 static std::vector<WebViewer> g_viewers;
 static std::vector<StreamViewer> g_sentViewers; // last list given to the stream
-static int g_passwordViewers = 0;
 
 // players who turned the cameras on, by Steam ID so it lasts through map changes
 static std::unordered_set<uint64_t> g_showSpecs;
@@ -232,12 +231,10 @@ static void updateScoreboard() {
 	std::string wanted[MAX_PLAYERS + 1];
 	int numSlots = emptySlots.size();
 	int numNamed = names.size();
-	int total = numNamed + g_passwordViewers;
 
-	if (numSlots && total) {
-		bool allFit = numNamed <= numSlots && (g_passwordViewers == 0 || numNamed < numSlots);
-		int shown = allFit ? numNamed : numSlots - 1;
-		int more = total - shown;
+	if (numSlots && numNamed) {
+		int shown = numNamed <= numSlots ? numNamed : numSlots - 1;
+		int more = numNamed - shown;
 		int first = numSlots - (shown + (more > 0 ? 1 : 0));
 
 		for (int i = 0; i < shown; i++) {
@@ -284,11 +281,7 @@ void updateStreamViewers() {
 		clients = g_sventv->getStreamClients();
 	}
 
-	// Viewers who used the stream password have no Steam ID, so they're only counted
-	g_passwordViewers = 0;
-	for (const StreamClientInfo& client : clients) {
-		g_passwordViewers += client.authed && !client.steamid64;
-	}
+	// viewers who used the stream password have no Steam ID, and aren't shown
 	clients.erase(std::remove_if(clients.begin(), clients.end(), [](const StreamClientInfo& c) {
 		return !c.authed || !c.steamid64;
 	}), clients.end());
