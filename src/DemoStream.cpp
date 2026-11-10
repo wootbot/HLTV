@@ -290,6 +290,7 @@ void DemoStream::updateClientInfo() {
 		info.address = client.address;
 		info.state = client.joined ? "watching" : (client.authed ? "waiting" : "logging in");
 		info.steamid64 = client.steamid64;
+		info.authed = client.authed;
 		info.seconds = (uint32_t)((now - client.connectTime) / 1000);
 		info.bytesSent = client.bytesSent;
 		info.behind = client.joined ? (firstSeq + ring.size()) - client.nextSeq : 0;

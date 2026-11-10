@@ -36,6 +36,7 @@ enum stream_packet_types {
 struct StreamClientInfo {
 	std::string address;
 	const char* state;
+	bool authed; // gave the password or a valid token, so watching or waiting for the next session
 	uint32_t seconds; // time connected
 	uint64_t bytesSent;
 	uint64_t behind; // packets waiting to be sent
